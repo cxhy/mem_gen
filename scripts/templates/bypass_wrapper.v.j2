@@ -1,0 +1,123 @@
+{%- from "_macros.v.j2" import file_header -%}
+{{ file_header(module_name, description, date) }}
+
+module {{ module_name }} #(
+    parameter DATA_WIDTH              = {{ data_width }},
+    parameter RAM_DEPTH               = {{ ram_depth }},
+    parameter BYPASS_DEPTH            = {{ bypass_depth }},
+    parameter ADDR_WIDTH              = $clog2(RAM_DEPTH)
+)(
+{% for port in module_ports %}
+{% if port.startswith("//") %}
+    {{ port }}
+{% else %}
+    {{ port }}{{ "," if not loop.last else "" }}
+{% endif %}
+{% endfor %}
+);
+
+// ==========================================================================
+// L2 Memory Wrapper Instance
+// ==========================================================================
+{% if has_mask %}
+localparam MASK_WIDTH = {{ mask_width }};
+localparam MASK_GRAN  = {{ mask_gran }};
+{% endif %}
+wire [DATA_WIDTH-1:0] l2_rd_data;
+{% if has_ecc %}
+wire                  l2_ecc_correctable_valid;
+wire [ADDR_WIDTH-1:0] l2_ecc_correctable_addr;
+wire                  l2_ecc_uncorrectable_valid;
+wire [ADDR_WIDTH-1:0] l2_ecc_uncorrectable_addr;
+{% if detailed_report %}
+wire [{{ ecc_m }}-1:0]  l2_ecc_err_syndrome;
+{% endif %}
+{% endif %}
+
+{{ l2_wrapper_name }} u_{{ l2_wrapper_name }} (
+{% for port in l2_inst_ports %}
+    {{ port }}{{ "," if not loop.last else "" }}
+{% endfor %}
+);
+
+// ==========================================================================
+// Bypass Logic
+// ==========================================================================
+
+// -- Conflict detection (combinational) --
+wire bypass_hit = i_wr_en & i_rd_en & (i_wr_addr == i_rd_addr);
+
+// -- Bypass entry packing --
+{% if has_mask %}
+wire [{{ bypass_data_width }}-1:0] bypass_entry_in = {bypass_hit, i_wr_bwen, i_wr_data};
+{% else %}
+wire [{{ bypass_data_width }}-1:0] bypass_entry_in = {bypass_hit, i_wr_data};
+{% endif %}
+
+// -- Delay pipeline (align with L2 read latency) --
+wire [{{ bypass_data_width }}-1:0] bypass_entry_out;
+
+data_syncn #(
+    .RESET_VALUE ({({{ bypass_data_width }}){1'b0}}),
+    .NUM_FLOPS   (BYPASS_DEPTH),
+    .DATA_WIDTH  ({{ bypass_data_width }})
+) u_bypass_pipe (
+    .clk           (i_clk),
+    .reset_n       (i_rst_n),
+    .data_in       (bypass_entry_in),
+    .data_out_sync (bypass_entry_out)
+);
+
+// -- Unpack delayed bypass entry --
+{% if has_mask %}
+wire                  delayed_hit    = bypass_entry_out[MASK_WIDTH + DATA_WIDTH];
+wire [MASK_WIDTH-1:0] delayed_bwen   = bypass_entry_out[DATA_WIDTH +: MASK_WIDTH];
+wire [DATA_WIDTH-1:0] delayed_wdata  = bypass_entry_out[DATA_WIDTH-1:0];
+{% else %}
+wire                  delayed_hit    = bypass_entry_out[DATA_WIDTH];
+wire [DATA_WIDTH-1:0] delayed_wdata  = bypass_entry_out[DATA_WIDTH-1:0];
+{% endif %}
+
+// ==========================================================================
+// Output Mux
+// ==========================================================================
+{% if has_mask %}
+{% if mask_gran > 1 %}
+// Expand coarse mask to bit-level for output mux
+wire [DATA_WIDTH-1:0] expanded_bwen;
+genvar g_byp;
+generate
+    for (g_byp = 0; g_byp < MASK_WIDTH; g_byp = g_byp + 1) begin : G_BYP_MASK
+        assign expanded_bwen[g_byp*MASK_GRAN +: MASK_GRAN] = {MASK_GRAN{delayed_bwen[g_byp]}};
+    end
+endgenerate
+
+// Masked bypass: written bits come from write data, unwritten bits from SRAM
+assign o_rd_data = delayed_hit
+    ? (delayed_wdata & expanded_bwen) | (l2_rd_data & ~expanded_bwen)
+    : l2_rd_data;
+{% else %}
+// Masked bypass: written bits come from write data, unwritten bits from SRAM
+assign o_rd_data = delayed_hit
+    ? (delayed_wdata & delayed_bwen) | (l2_rd_data & ~delayed_bwen)
+    : l2_rd_data;
+{% endif %}
+{% else %}
+assign o_rd_data = delayed_hit ? delayed_wdata : l2_rd_data;
+{% endif %}
+
+{% if has_ecc %}
+// ==========================================================================
+// ECC Signal Gating
+// ==========================================================================
+// When bypass is active, L2's ECC errors refer to stale SRAM data — gate them off.
+assign o_ecc_correctable_valid   = l2_ecc_correctable_valid   & ~delayed_hit;
+assign o_ecc_correctable_addr    = l2_ecc_correctable_addr;
+assign o_ecc_uncorrectable_valid = l2_ecc_uncorrectable_valid & ~delayed_hit;
+assign o_ecc_uncorrectable_addr  = l2_ecc_uncorrectable_addr;
+{% if detailed_report %}
+assign o_ecc_err_syndrome        = l2_ecc_err_syndrome;
+{% endif %}
+{% endif %}
+
+endmodule

@@ -1,0 +1,199 @@
+{
+  "project": "phy_test",
+  "prefix": "lx",
+  "memories": [
+    {
+      "name": "test_1rw_1x1",
+      "type": "1rw",
+      "width": 32,
+      "depth": 256,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "1prf",
+        "lib_name": "SRAM_SP_256x32",
+        "lib_width": 32,
+        "lib_depth": 256
+      },
+      "enable_l2": false,
+      "note": "1rw 无拼接 1x1"
+    },
+    {
+      "name": "test_1rwm_2x1",
+      "type": "1rwm",
+      "width": 64,
+      "depth": 256,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "1prf",
+        "lib_name": "SRAM_SPM_256x32",
+        "lib_width": 32,
+        "lib_depth": 256,
+        "lib_mask_width": 32
+      },
+      "enable_l2": false,
+      "note": "1rwm 纯列拼接 2x1 整除"
+    },
+    {
+      "name": "test_1r1w_1x2",
+      "type": "1r1w",
+      "width": 32,
+      "depth": 512,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "uhd2prf",
+        "lib_name": "SRAM_DP_256x32",
+        "lib_width": 32,
+        "lib_depth": 256
+      },
+      "enable_l2": false,
+      "note": "1r1w 纯行拼接 1x2 整除"
+    },
+    {
+      "name": "test_1r1wm_2x2",
+      "type": "1r1wm",
+      "width": 64,
+      "depth": 512,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "uhd2prf",
+        "lib_name": "SRAM_DPM_256x32",
+        "lib_width": 32,
+        "lib_depth": 256,
+        "lib_mask_width": 32
+      },
+      "enable_l2": false,
+      "note": "1r1wm 行列混合拼接 2x2 整除"
+    },
+    {
+      "name": "test_1r1wa_col_pad",
+      "type": "1r1wa",
+      "width": 48,
+      "depth": 256,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "2prf",
+        "lib_name": "SRAM_DPA_256x32",
+        "lib_width": 32,
+        "lib_depth": 256
+      },
+      "enable_l2": false,
+      "note": "1r1wa 列不整除 2x1, W=48->64 pad=16"
+    },
+    {
+      "name": "test_1r1wma_row_pad",
+      "type": "1r1wma",
+      "width": 32,
+      "depth": 384,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "2prf",
+        "lib_name": "SRAM_DPMA_256x32",
+        "lib_width": 32,
+        "lib_depth": 256,
+        "lib_mask_width": 32
+      },
+      "enable_l2": false,
+      "note": "1r1wma 行不整除 1x2, D=384->512"
+    },
+    {
+      "name": "test_2rw_both_pad",
+      "type": "2rw",
+      "width": 48,
+      "depth": 384,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "dpsram",
+        "lib_name": "SRAM_TDP_256x32",
+        "lib_width": 32,
+        "lib_depth": 256
+      },
+      "enable_l2": false,
+      "note": "2rw 行列均不整除 2x2, W=48->64 pad=16, D=384->512"
+    },
+    {
+      "name": "test_2rwm_1x1",
+      "type": "2rwm",
+      "width": 32,
+      "depth": 256,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "dpsram",
+        "lib_name": "SRAM_TDPM_256x32",
+        "lib_width": 32,
+        "lib_depth": 256,
+        "lib_mask_width": 32
+      },
+      "enable_l2": false,
+      "note": "2rwm 无拼接 1x1"
+    },
+    {
+      "name": "test_rom_col_pad",
+      "type": "rom",
+      "width": 48,
+      "depth": 256,
+      "ram_rd_latency": 1,
+      "input_pipe_stages": 0,
+      "ecc_pipe_stages": 0,
+      "output_pipe_stages": 0,
+      "ecc": {
+        "enable": false
+      },
+      "physical": {
+        "sub_type": "rom",
+        "lib_name": "SRAM_ROM_256x32",
+        "lib_width": 32,
+        "lib_depth": 256
+      },
+      "enable_l2": false,
+      "note": "rom 列不整除 2x1, W=48->64 pad=16"
+    }
+  ]
+}

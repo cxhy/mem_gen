@@ -1,0 +1,192 @@
+{%- from "_macros.v.j2" import file_header -%}
+{{ file_header(module_name, description, date) }}
+
+module {{ module_name }} #(
+    parameter DATA_WIDTH  = {{ data_width }},
+    parameter ADDR_WIDTH  = {{ addr_width }}
+)(
+{% for port in module_ports %}
+    {{ port }}{{ "," if not loop.last else "" }}
+{% endfor %}
+);
+
+`ifdef SIM
+// -- Behavioral simulation model (no vendor cells) --
+initial $display("[SIM] %m: Using behavioral simulation model");
+
+reg [DATA_WIDTH-1:0] sim_mem [0:{{ sim_depth - 1 }}];
+
+{% if sim_mode == "rw" %}
+reg [DATA_WIDTH-1:0] sim_rdata;
+
+always @(posedge clk) begin
+    if (cen) begin
+        if (wen) begin
+{% if sim_has_mask %}
+            begin : sim_masked_write
+                integer i;
+                for (i = 0; i < DATA_WIDTH; i = i + 1) begin
+                    if (bwen[i / {{ sim_mask_gran }}])
+                        sim_mem[addr][i] <= wdata[i];
+                end
+            end
+{% else %}
+            sim_mem[addr] <= wdata;
+{% endif %}
+        end else begin
+            sim_rdata <= sim_mem[addr];
+        end
+    end
+end
+
+assign rdata = sim_rdata;
+{% elif sim_mode == "dp" %}
+reg [DATA_WIDTH-1:0] sim_rdata;
+
+always @(posedge {{ "wr_clk" if sim_is_async else "clk" }}) begin
+    if (wr_en) begin
+{% if sim_has_mask %}
+        begin : sim_masked_write
+            integer i;
+            for (i = 0; i < DATA_WIDTH; i = i + 1) begin
+                if (wr_mask[i / {{ sim_mask_gran }}])
+                    sim_mem[wr_addr][i] <= wr_data[i];
+            end
+        end
+{% else %}
+        sim_mem[wr_addr] <= wr_data;
+{% endif %}
+    end
+end
+
+always @(posedge {{ "rd_clk" if sim_is_async else "clk" }}) begin
+    if (rd_en) begin
+        sim_rdata <= sim_mem[rd_addr];
+    end
+end
+
+assign rd_data = sim_rdata;
+{% elif sim_mode == "tdp" %}
+reg [DATA_WIDTH-1:0] sim_a_rdata;
+reg [DATA_WIDTH-1:0] sim_b_rdata;
+
+always @(posedge a_clk) begin
+    if (a_cen) begin
+        if (a_wen) begin
+{% if sim_has_mask %}
+            begin : sim_masked_write_a
+                integer i;
+                for (i = 0; i < DATA_WIDTH; i = i + 1) begin
+                    if (a_bwen[i / {{ sim_mask_gran }}])
+                        sim_mem[a_addr][i] <= a_wdata[i];
+                end
+            end
+{% else %}
+            sim_mem[a_addr] <= a_wdata;
+{% endif %}
+        end else begin
+            sim_a_rdata <= sim_mem[a_addr];
+        end
+    end
+end
+
+always @(posedge b_clk) begin
+    if (b_cen) begin
+        if (b_wen) begin
+{% if sim_has_mask %}
+            begin : sim_masked_write_b
+                integer i;
+                for (i = 0; i < DATA_WIDTH; i = i + 1) begin
+                    if (b_bwen[i / {{ sim_mask_gran }}])
+                        sim_mem[b_addr][i] <= b_wdata[i];
+                end
+            end
+{% else %}
+            sim_mem[b_addr] <= b_wdata;
+{% endif %}
+        end else begin
+            sim_b_rdata <= sim_mem[b_addr];
+        end
+    end
+end
+
+assign a_rdata = sim_a_rdata;
+assign b_rdata = sim_b_rdata;
+{% elif sim_mode == "rom" %}
+reg [DATA_WIDTH-1:0] sim_rdata;
+
+always @(posedge clk) begin
+    if (cen) begin
+        sim_rdata <= sim_mem[addr];
+    end
+end
+
+assign rdata = sim_rdata;
+{% endif %}
+
+`else
+localparam LIB_ADDR_WIDTH = {{ lib_addr_width }};
+{% if row_sel_width > 0 %}
+localparam ROW_SEL_WIDTH  = {{ row_sel_width }};
+{% endif %}
+
+{% for wire in internal_wires %}
+{{ wire }}
+{% endfor %}
+
+{% for reg in row_sel_regs %}
+// Read-return alignment register (updates only on valid read)
+wire [ROW_SEL_WIDTH-1:0] {{ reg.name }};
+std_dffe #(.WIDTH(ROW_SEL_WIDTH)) u_{{ reg.name }} (
+    .clk ({{ reg.clk }}),
+    .en  ({{ reg.enable }}),
+    .d   ({{ reg.input }}),
+    .q   ({{ reg.name }})
+);
+
+{% endfor %}
+{% for group in rd_data_wire_groups %}
+{% for row in range(row_count) %}
+wire [{{ total_phy_width - 1 }}:0] {{ group.prefix }}row_{{ row }}_rd_data;
+{% endfor %}
+
+{% endfor %}
+{% if mask_expand_blocks %}
+// -- Mask expansion: coarse mask → bit-level for vendor BWEB --
+{% for blk in mask_expand_blocks %}
+wire [{{ blk.lib_width - 1 }}:0] {{ blk.wire_name }};
+genvar {{ blk.genvar_name }};
+generate
+    for ({{ blk.genvar_name }} = 0; {{ blk.genvar_name }} < {{ blk.lib_mask_width }}; {{ blk.genvar_name }} = {{ blk.genvar_name }} + 1) begin : {{ blk.label }}
+        assign {{ blk.wire_name }}[{{ blk.genvar_name }} * {{ blk.mask_gran }} +: {{ blk.mask_gran }}] = {{ "{" }}{{ blk.mask_gran }}{{ "{" }}{{ blk.mask_base_signal }}[{{ blk.mask_offset }} + {{ blk.genvar_name }}]{{ "}}" }};
+    end
+endgenerate
+
+{% endfor %}
+{% endif %}
+{% for cell in cells %}
+{{ lib_name }} {{ cell.inst_name }} (
+    {{ cell.ports | join(",\n    ") }}
+);
+
+{% endfor %}
+{% for mux in read_muxes %}
+{% if row_count == 1 %}
+assign {{ mux.rd_data_name }} = {{ mux.wire_prefix }}row_0_rd_data[{{ data_width - 1 }}:0];
+{% else %}
+// Read data mux (using delayed row select)
+reg [{{ total_phy_width - 1 }}:0] {{ mux.wire_prefix }}rd_data_mux;
+always @(*) begin
+    case ({{ mux.sel_signal }})
+{% for row in range(row_count) %}
+        {{ row_sel_width }}'d{{ row }}: {{ mux.wire_prefix }}rd_data_mux = {{ mux.wire_prefix }}row_{{ row }}_rd_data;
+{% endfor %}
+        default: {{ mux.wire_prefix }}rd_data_mux = {{ total_phy_width }}'b0;
+    endcase
+end
+assign {{ mux.rd_data_name }} = {{ mux.wire_prefix }}rd_data_mux[{{ data_width - 1 }}:0];
+{% endif %}
+
+{% endfor %}
+`endif
+endmodule

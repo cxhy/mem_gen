@@ -1,0 +1,336 @@
+{
+  "vendor": "example",
+  "lib_paths": ["vendor"],
+
+  "lib_name_map": {
+    "sp_a":    "1prf",
+    "sp_b":    "uhd1prf",
+    "sp_sb":   "spsbsram",
+    "sp_uhd":  "uhdspsram",
+    "sp_mb":   "spmbsram",
+    "sp_hs":   "hsspsram",
+    "dp_a":    "2prf",
+    "dp_b":    "uhd2prf",
+    "tdp_a":   "dpsram",
+    "sp_l1":   "l1cache",
+    "sp_hdmb": "hdspmbsram",
+    "sp_hdsb": "hdspsbsram",
+    "rom_a":   "rom"
+  },
+  "lib_name_strip_suffixes": ["ulvt", "svt", "lvt"],
+
+  "interface_types": {
+
+    "1rw": {
+      "base_type": "single_port",
+      "has_mask": false,
+      "port_map": {
+        "clk":   "CLK",
+        "cen":   "~CEB",
+        "wen":   "~WEB",
+        "addr":  "A",
+        "wdata": "D",
+        "rdata": "Q"
+      },
+      "sub_types": [
+        {
+          "names": ["1prf", "uhd1prf", "spsbsram", "uhdspsram", "spmbsram", "hsspsram"],
+          "const_ports": {
+            "BWEB": "zeros",
+            "TM_A": 0, "TM_CEB": 1, "TM_WEB": 1, "TM_D": 0, "TM_BWEB": 1,
+            "BIST": 0, "SCAN_EN": 0, "SHUTDOWN": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_D": 0,
+            "RD_MARGIN": "{2'b10}", "WR_MARGIN": "{2'b01}"
+          },
+          "output_ports": ["SCAN_OUT_C", "SCAN_OUT_D", "PU_DLY_DS", "PU_DLY_SD"]
+        },
+        {
+          "names": ["l1cache"],
+          "const_ports": {
+            "BWEB": "zeros",
+            "EXTRA_CEB": 0, "SHUTDOWN": 0, "TURBO": 0, "WRITE_ASSIST_PW": 0,
+            "LATCH_REN": "2'b11",
+            "RD_MARGIN": "{2'b01}", "WR_MARGIN": "{2'b01}"
+          },
+          "output_ports": ["PU_DLY_SD"]
+        },
+        {
+          "names": ["hdspmbsram", "hdspsbsram"],
+          "const_ports": {
+            "BWEB": "zeros",
+            "TM_A": 0, "TM_CEB": 1, "TM_WEB": 1, "TM_D": 0, "TM_BWEB": 1,
+            "BIST": 0, "SCAN_EN": 0, "SHUTDOWN": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_D": 0,
+            "RD_MARGIN": "{2'b10}", "WR_MARGIN": "{2'b01}",
+            "WA_EN": "{1'b1}", "WA_SEL": "{2'b01}"
+          },
+          "output_ports": ["SCAN_OUT_C", "SCAN_OUT_D", "PU_DLY_DS", "PU_DLY_SD"]
+        }
+      ]
+    },
+
+    "1rwm": {
+      "base_type": "single_port",
+      "has_mask": true,
+      "port_map": {
+        "clk":   "CLK",
+        "cen":   "~CEB",
+        "wen":   "~WEB",
+        "addr":  "A",
+        "wdata": "D",
+        "rdata": "Q",
+        "bwen":  "~BWEB"
+      },
+      "sub_types": [
+        {
+          "names": ["1prf", "uhd1prf", "spsbsram", "uhdspsram", "spmbsram", "hsspsram"],
+          "const_ports": {
+            "TM_A": 0, "TM_CEB": 1, "TM_WEB": 1, "TM_D": 0, "TM_BWEB": 1,
+            "BIST": 0, "SCAN_EN": 0, "SHUTDOWN": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_D": 0,
+            "RD_MARGIN": "{2'b10}", "WR_MARGIN": "{2'b01}"
+          },
+          "output_ports": ["SCAN_OUT_C", "SCAN_OUT_D", "PU_DLY_DS", "PU_DLY_SD"]
+        },
+        {
+          "names": ["l1cache"],
+          "const_ports": {
+            "EXTRA_CEB": 0, "SHUTDOWN": 0, "TURBO": 0, "WRITE_ASSIST_PW": 0,
+            "LATCH_REN": "2'b11",
+            "RD_MARGIN": "{2'b01}", "WR_MARGIN": "{2'b01}"
+          },
+          "output_ports": ["PU_DLY_SD"]
+        },
+        {
+          "names": ["hdspmbsram", "hdspsbsram"],
+          "const_ports": {
+            "TM_A": 0, "TM_CEB": 1, "TM_WEB": 1, "TM_D": 0, "TM_BWEB": 1,
+            "BIST": 0, "SCAN_EN": 0, "SHUTDOWN": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_D": 0,
+            "RD_MARGIN": "{2'b10}", "WR_MARGIN": "{2'b01}",
+            "WA_EN": "{1'b1}", "WA_SEL": "{2'b01}"
+          },
+          "output_ports": ["SCAN_OUT_C", "SCAN_OUT_D", "PU_DLY_DS", "PU_DLY_SD"]
+        }
+      ]
+    },
+
+    "1r1w": {
+      "base_type": "dual_port",
+      "has_mask": false,
+      "async": false,
+      "port_map": {
+        "clk":     "CLK",
+        "wr_en":   "~WEB",
+        "wr_addr": "AB",
+        "wr_data": "D",
+        "rd_en":   "~REB",
+        "rd_addr": "AA",
+        "rd_data": "Q"
+      },
+      "sub_types": [
+        {
+          "names": ["uhd2prf"],
+          "const_ports": {
+            "BWEB": "zeros",
+            "TM_AA": 0, "TM_AB": 0, "TM_D": 0, "TM_BWEB": 1, "TM_REB": 1, "TM_WEB": 1,
+            "BIST": 0, "SCAN_EN": 0, "SHUTDOWN": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_D": 0,
+            "RD_MARGIN": "{3'b010}", "WR_MARGIN": "{3'b001}", "MID_MARGIN": "{2'b01}"
+          },
+          "output_ports": ["SCAN_OUT_C", "SCAN_OUT_D", "PU_DLY_SD", "PU_DLY_DS"]
+        }
+      ]
+    },
+
+    "1r1wm": {
+      "base_type": "dual_port",
+      "has_mask": true,
+      "async": false,
+      "port_map": {
+        "clk":     "CLK",
+        "wr_en":   "~WEB",
+        "wr_addr": "AB",
+        "wr_data": "D",
+        "wr_mask": "~BWEB",
+        "rd_en":   "~REB",
+        "rd_addr": "AA",
+        "rd_data": "Q"
+      },
+      "sub_types": [
+        {
+          "names": ["uhd2prf"],
+          "const_ports": {
+            "TM_AA": 0, "TM_AB": 0, "TM_D": 0, "TM_BWEB": 1, "TM_REB": 1, "TM_WEB": 1,
+            "BIST": 0, "SCAN_EN": 0, "SHUTDOWN": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_D": 0,
+            "RD_MARGIN": "{3'b010}", "WR_MARGIN": "{3'b001}", "MID_MARGIN": "{2'b01}"
+          },
+          "output_ports": ["SCAN_OUT_C", "SCAN_OUT_D", "PU_DLY_SD", "PU_DLY_DS"]
+        }
+      ]
+    },
+
+    "1r1wa": {
+      "base_type": "dual_port",
+      "has_mask": false,
+      "async": true,
+      "port_map": {
+        "wr_clk":  "CLKW",
+        "rd_clk":  "CLKR",
+        "wr_en":   "~WEB",
+        "wr_addr": "AB",
+        "wr_data": "D",
+        "rd_en":   "~REB",
+        "rd_addr": "AA",
+        "rd_data": "Q"
+      },
+      "sub_types": [
+        {
+          "names": ["2prf"],
+          "const_ports": {
+            "BWEB": "zeros",
+            "TM_AA": 0, "TM_AB": 0, "TM_D": 0, "TM_BWEB": 1, "TM_REB": 1, "TM_WEB": 1,
+            "BIST": 0, "SCAN_EN": 0, "SHUTDOWN": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_D": 0,
+            "RD_CTRL": "{2'b01}", "WR_CTRL": "{2'b01}", "KEEP_PWR": "{2'b10}"
+          },
+          "output_ports": ["SCAN_OUT_C", "SCAN_OUT_D", "PU_DLY_SD", "PU_DLY_DS"]
+        }
+      ]
+    },
+
+    "1r1wma": {
+      "base_type": "dual_port",
+      "has_mask": true,
+      "async": true,
+      "port_map": {
+        "wr_clk":  "CLKW",
+        "rd_clk":  "CLKR",
+        "wr_en":   "~WEB",
+        "wr_addr": "AB",
+        "wr_data": "D",
+        "wr_mask": "~BWEB",
+        "rd_en":   "~REB",
+        "rd_addr": "AA",
+        "rd_data": "Q"
+      },
+      "sub_types": [
+        {
+          "names": ["2prf"],
+          "const_ports": {
+            "TM_AA": 0, "TM_AB": 0, "TM_D": 0, "TM_BWEB": 1, "TM_REB": 1, "TM_WEB": 1,
+            "BIST": 0, "SCAN_EN": 0, "SHUTDOWN": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_D": 0,
+            "RD_CTRL": "{2'b01}", "WR_CTRL": "{2'b01}", "KEEP_PWR": "{2'b10}"
+          },
+          "output_ports": ["SCAN_OUT_C", "SCAN_OUT_D", "PU_DLY_SD", "PU_DLY_DS"]
+        }
+      ]
+    },
+
+    "2rw": {
+      "base_type": "true_dual_port",
+      "has_mask": false,
+      "port_map": {
+        "a_clk":   "CLKA",
+        "a_cen":   "~CEBA",
+        "a_wen":   "~WEBA",
+        "a_addr":  "AA",
+        "a_wdata": "DA",
+        "a_rdata": "QA",
+        "b_clk":   "CLKB",
+        "b_cen":   "~CEBB",
+        "b_wen":   "~WEBB",
+        "b_addr":  "AB",
+        "b_wdata": "DB",
+        "b_rdata": "QB"
+      },
+      "sub_types": [
+        {
+          "names": ["dpsram"],
+          "const_ports": {
+            "BWEBA": "zeros", "BWEBB": "zeros",
+            "TM_AA": 0, "TM_DA": 0, "TM_WEBA": 0, "TM_CEBA": 0, "TM_BWEBA": 0,
+            "TM_AB": 0, "TM_DB": 0, "TM_WEBB": 0, "TM_CEBB": 0, "TM_BWEBB": 0,
+            "BIST": 0, "BIST_CLKEN": 0, "BIST_CLK": 0,
+            "SCAN_EN": 0, "SHUTDOWN": 0, "LIGHT_SLEEP": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_CA": 0, "SCAN_IN_DA": 0, "SCAN_IN_CB": 0, "SCAN_IN_DB": 0,
+            "RD_MARGIN": "{2'b10}", "WR_MARGIN": "{2'b01}"
+          },
+          "output_ports": ["SCAN_OUT_CA", "SCAN_OUT_DA", "SCAN_OUT_CB", "SCAN_OUT_DB", "PU_DLY_SD", "PU_DLY_DS"]
+        }
+      ]
+    },
+
+    "2rwm": {
+      "base_type": "true_dual_port",
+      "has_mask": true,
+      "port_map": {
+        "a_clk":   "CLKA",
+        "a_cen":   "~CEBA",
+        "a_wen":   "~WEBA",
+        "a_addr":  "AA",
+        "a_wdata": "DA",
+        "a_rdata": "QA",
+        "a_bwen":  "~BWEBA",
+        "b_clk":   "CLKB",
+        "b_cen":   "~CEBB",
+        "b_wen":   "~WEBB",
+        "b_addr":  "AB",
+        "b_wdata": "DB",
+        "b_rdata": "QB",
+        "b_bwen":  "~BWEBB"
+      },
+      "sub_types": [
+        {
+          "names": ["dpsram"],
+          "const_ports": {
+            "TM_AA": 0, "TM_DA": 0, "TM_WEBA": 0, "TM_CEBA": 0, "TM_BWEBA": 0,
+            "TM_AB": 0, "TM_DB": 0, "TM_WEBB": 0, "TM_CEBB": 0, "TM_BWEBB": 0,
+            "BIST": 0, "BIST_CLKEN": 0, "BIST_CLK": 0,
+            "SCAN_EN": 0, "SHUTDOWN": 0, "LIGHT_SLEEP": 0, "DEEP_SLEEP": 0, "DEEP_SLEEP_LV": 0,
+            "DFT_BYPASS": 0, "FUSE_IO": 0, "REDUNDANCY_IO": 0,
+            "SCAN_IN_CA": 0, "SCAN_IN_DA": 0, "SCAN_IN_CB": 0, "SCAN_IN_DB": 0,
+            "RD_MARGIN": "{2'b10}", "WR_MARGIN": "{2'b01}"
+          },
+          "output_ports": ["SCAN_OUT_CA", "SCAN_OUT_DA", "SCAN_OUT_CB", "SCAN_OUT_DB", "PU_DLY_SD", "PU_DLY_DS"]
+        }
+      ]
+    },
+
+    "rom": {
+      "base_type": "rom",
+      "has_mask": false,
+      "port_map": {
+        "clk":   "CLK",
+        "cen":   "~CEB",
+        "addr":  "A",
+        "rdata": "Q"
+      },
+      "sub_types": [
+        {
+          "names": ["rom"],
+          "const_ports": {
+            "TM_A": 0, "TM_CEB": 0,
+            "BIST": 0, "DFT_BYPASS": 0,
+            "SCAN_EN": 0, "SHUTDOWN": 0,
+            "SCAN_IN_C": 0, "SCAN_IN_Q": 0,
+            "CLK_HIGH_EN": 0, "CLK_LOW_EN": 1, "DELAY_TEST": 0,
+            "SKIP": "{2'b01}"
+          },
+          "output_ports": ["PU_DLY", "SCAN_OUT_C", "SCAN_OUT_Q"]
+        }
+      ]
+    }
+  }
+}

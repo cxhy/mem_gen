@@ -1,0 +1,370 @@
+{%- from "_macros.v.j2" import file_header -%}
+{{ file_header(module_name, description, date) }}
+
+module {{ module_name }} #(
+    parameter DATA_WIDTH              = {{ data_width }},
+    parameter RAM_DEPTH               = {{ ram_depth }},
+    parameter RAM_RD_LATENCY          = {{ ram_rd_latency }},
+{% if has_ecc %}
+    parameter ECC_SLICE_DW            = {{ ecc_slice_dw }},
+    parameter ECC_SLICE_WITH_ECC_DW   = {{ ecc_slice_with_ecc_dw }},
+    parameter ECC_PADDED_SLICE_DW     = {{ ecc_padded_slice_dw }},
+    parameter ECC_SLICE_NUM           = {{ ecc_slice_num }},
+    parameter ECC_PAD_PER_SLICE       = ECC_PADDED_SLICE_DW - ECC_SLICE_WITH_ECC_DW,
+    parameter DATA_PAD_WIDTH          = ECC_SLICE_DW * ECC_SLICE_NUM,
+    parameter DATA_WITH_ECC_DW        = ECC_PADDED_SLICE_DW * ECC_SLICE_NUM,
+{% endif %}
+    parameter INPUT_PIPE_STAGES       = {{ input_pipe_stages }},
+    parameter ECC_PIPE_STAGES         = {{ ecc_pipe_stages }},
+    parameter OUTPUT_PIPE_STAGES      = {{ output_pipe_stages }},
+    parameter ADDR_WIDTH              = $clog2(RAM_DEPTH)
+)(
+{% for port in module_ports %}
+{% if port.startswith("//") %}
+    {{ port }}
+{% else %}
+    {{ port }}{{ "," if not loop.last else "" }}
+{% endif %}
+{% endfor %}
+);
+
+{% if has_ecc %}
+localparam PHY_DATA_WIDTH = DATA_WITH_ECC_DW;
+{% else %}
+localparam PHY_DATA_WIDTH = DATA_WIDTH;
+{% endif %}
+{% if has_mask %}
+localparam MASK_WIDTH       = {{ mask_width }};
+localparam TOTAL_MASK_WIDTH = {{ total_mask_width }};
+{% endif %}
+
+// ==========================================================================
+// Input Pipeline
+// ==========================================================================
+{% for pipe in input_pipes %}
+{% for sig in pipe.wire_decls %}
+{{ sig }}
+{% endfor %}
+
+data_syncn #(
+    .RESET_VALUE ({({{ pipe.total_width_expr }}){1'b0}}),
+    .NUM_FLOPS   (INPUT_PIPE_STAGES),
+    .DATA_WIDTH  ({{ pipe.total_width_expr }})
+) {{ pipe.inst_name }} (
+    .clk           ({{ pipe.clk }}),
+    .reset_n       (i_rst_n),
+    .data_in       ({
+                     {{ pipe.data_in | join(",\n                     ") }}
+                    }),
+    .data_out_sync ({
+                     {{ pipe.data_out | join(",\n                     ") }}
+                    })
+);
+
+{% endfor %}
+{% if has_init %}
+// ==========================================================================
+// Init FSM
+// ==========================================================================
+reg  init_started;
+reg  [ADDR_WIDTH:0] init_count;
+reg  init_done;
+
+always @(posedge {{ init_clk }} or negedge i_rst_n) begin
+    if (~i_rst_n) begin
+        init_started <= 1'b0;
+        init_count   <= {(ADDR_WIDTH+1){1'b0}};
+    end else begin
+        if (~init_started && i_init_en) begin
+            init_started <= 1'b1;
+            init_count   <= {(ADDR_WIDTH+1){1'b0}};
+        end
+        else if (init_started && init_count != RAM_DEPTH) begin
+            init_count <= init_count + 1'b1;
+        end
+        else if (init_started && init_count == RAM_DEPTH) begin
+            init_started <= 1'b0;
+            init_count   <= {(ADDR_WIDTH+1){1'b0}};
+        end
+    end
+end
+
+always @(posedge {{ init_clk }} or negedge i_rst_n) begin
+    if (~i_rst_n) begin
+        init_done <= 1'b0;
+    end
+    else if (init_started && (init_count == {(ADDR_WIDTH+1){1'b0}})) begin
+        init_done <= 1'b0;
+    end
+    else if (init_count == (RAM_DEPTH - 1)) begin
+        init_done <= 1'b1;
+    end
+end
+
+wire init_ram_en   = init_started && (init_count < RAM_DEPTH);
+wire [ADDR_WIDTH-1:0] init_ram_addr = init_count[ADDR_WIDTH-1:0];
+
+assign o_init_done = init_done;
+
+{% endif %}
+{% if write_paths %}
+// ==========================================================================
+// ECC Encode / Write Data Prepare
+// ==========================================================================
+{% for wp in write_paths %}
+{% if has_ecc %}
+wire [DATA_PAD_WIDTH-1:0] {{ wp.pad_data_signal }} =
+{% if wp.has_init_mux %}
+    init_ram_en ? {DATA_PAD_WIDTH{i_init_value}} :
+{% endif %}
+    { {(DATA_PAD_WIDTH - DATA_WIDTH){1'b0}}, {{ wp.pipe_wdata }} };
+
+wire [DATA_WITH_ECC_DW-1:0] {{ wp.ecc_wr_data }};
+
+genvar {{ wp.genvar_enc }};
+generate
+    for ({{ wp.genvar_enc }} = 0; {{ wp.genvar_enc }} < ECC_SLICE_NUM; {{ wp.genvar_enc }} = {{ wp.genvar_enc }} + 1) begin : {{ wp.enc_gen_label }}
+        wire [ECC_SLICE_WITH_ECC_DW-1:0] enc_out;
+        {{ enc_module }} u_{{ enc_module }}_{{ wp.prefix }} (
+            .data_i ({{ wp.pad_data_signal }}[{{ wp.genvar_enc }}*ECC_SLICE_DW          +: ECC_SLICE_DW]),
+            .data_o (enc_out)
+        );
+{% if ecc_pad_per_slice > 0 %}
+        assign {{ wp.ecc_wr_data }}[{{ wp.genvar_enc }}*ECC_PADDED_SLICE_DW +: ECC_PADDED_SLICE_DW] =
+            { {ECC_PAD_PER_SLICE{1'b0}}, enc_out };
+{% else %}
+        assign {{ wp.ecc_wr_data }}[{{ wp.genvar_enc }}*ECC_PADDED_SLICE_DW +: ECC_PADDED_SLICE_DW] = enc_out;
+{% endif %}
+    end
+endgenerate
+
+{% else %}
+{% if wp.has_init_mux %}
+wire [DATA_WIDTH-1:0] {{ wp.phy_wr_data }} =
+    init_ram_en ? {DATA_WIDTH{i_init_value}} : {{ wp.pipe_wdata }};
+{% endif %}
+{% endif %}
+{% endfor %}
+
+{% endif %}
+// ==========================================================================
+// Physical Wrapper Instance
+// ==========================================================================
+{% for line in phy_connect_lines %}
+{{ line }}
+{% endfor %}
+
+{% for rp in read_paths %}
+wire [PHY_DATA_WIDTH-1:0] {{ rp.phy_rd_data }};
+{% endfor %}
+
+{{ phy_wrapper_name }} u_{{ phy_wrapper_name }} (
+{% for port in phy_inst_ports %}
+    {{ port }}{{ "," if not loop.last else "" }}
+{% endfor %}
+);
+
+{% for rp in read_paths %}
+// ==========================================================================
+// Read Path{{ " (" ~ rp.port_label ~ ")" if rp.port_label else "" }}
+// ==========================================================================
+
+// -- Read Latency Alignment --
+wire                  {{ rp.prefix }}wait_chk_rd_vld;
+wire [ADDR_WIDTH-1:0] {{ rp.prefix }}wait_chk_rd_addr;
+
+data_syncn #(
+    .RESET_VALUE ({(ADDR_WIDTH + 1){1'b0}}),
+    .NUM_FLOPS   (RAM_RD_LATENCY),
+    .DATA_WIDTH  (ADDR_WIDTH + 1)
+) u_{{ rp.prefix }}rd_latency (
+    .clk           ({{ rp.clk }}),
+    .reset_n       (i_rst_n),
+    .data_in       ({ {{ rp.rd_addr_signal }}, {{ rp.rd_en_signal }} }),
+    .data_out_sync ({ {{ rp.prefix }}wait_chk_rd_addr, {{ rp.prefix }}wait_chk_rd_vld })
+);
+
+{% if has_ecc %}
+// -- ECC Decode --
+wire [DATA_PAD_WIDTH-1:0]           {{ rp.prefix }}chk_done_rd_data;
+wire [{{ ecc_m }}*ECC_SLICE_NUM-1:0]  {{ rp.prefix }}chk_done_syndrome;
+wire [2*ECC_SLICE_NUM-1:0]          {{ rp.prefix }}chk_done_err;
+wire [ECC_SLICE_NUM-1:0]            {{ rp.prefix }}chk_done_1bit_err;
+wire [ECC_SLICE_NUM-1:0]            {{ rp.prefix }}chk_done_2bit_err;
+
+genvar {{ rp.genvar_dec }};
+generate
+    for ({{ rp.genvar_dec }} = 0; {{ rp.genvar_dec }} < ECC_SLICE_NUM; {{ rp.genvar_dec }} = {{ rp.genvar_dec }} + 1) begin : {{ rp.dec_gen_label }}
+        {{ dec_module }} u_{{ dec_module }}_{{ rp.prefix_bare }} (
+            .data_i     ({{ rp.phy_rd_data }}    [{{ rp.genvar_dec }}*ECC_PADDED_SLICE_DW +: ECC_SLICE_WITH_ECC_DW]),
+            .data_o     ({{ rp.prefix }}chk_done_rd_data    [{{ rp.genvar_dec }}*ECC_SLICE_DW          +: ECC_SLICE_DW]),
+            .syndrome_o ({{ rp.prefix }}chk_done_syndrome   [{{ rp.genvar_dec }}*{{ ecc_m }}             +: {{ ecc_m }}]),
+            .err_o      ({{ rp.prefix }}chk_done_err        [{{ rp.genvar_dec }}*2                     +: 2])
+        );
+        assign {{ rp.prefix }}chk_done_1bit_err[{{ rp.genvar_dec }}] = {{ rp.prefix }}chk_done_err[{{ rp.genvar_dec }}*2];
+        assign {{ rp.prefix }}chk_done_2bit_err[{{ rp.genvar_dec }}] = {{ rp.prefix }}chk_done_err[{{ rp.genvar_dec }}*2 + 1];
+    end
+endgenerate
+
+// -- Non-ECC Data Extraction --
+wire [DATA_PAD_WIDTH-1:0] {{ rp.prefix }}no_ecc_rd_data;
+
+genvar {{ rp.genvar_noec }};
+generate
+    for ({{ rp.genvar_noec }} = 0; {{ rp.genvar_noec }} < ECC_SLICE_NUM; {{ rp.genvar_noec }} = {{ rp.genvar_noec }} + 1) begin : {{ rp.noec_gen_label }}
+        assign {{ rp.prefix }}no_ecc_rd_data[{{ rp.genvar_noec }}*ECC_SLICE_DW +: ECC_SLICE_DW] =
+            {{ rp.phy_rd_data }}[{{ rp.genvar_noec }}*ECC_PADDED_SLICE_DW +: ECC_SLICE_DW];
+    end
+endgenerate
+
+// -- Output Mux (ECC corrected vs raw) --
+wire [DATA_WIDTH-1:0] {{ rp.prefix }}out_rd_data = i_ecc_en
+    ? {{ rp.prefix }}chk_done_rd_data[DATA_WIDTH-1:0]
+    : {{ rp.prefix }}no_ecc_rd_data[DATA_WIDTH-1:0];
+
+// -- ECC Error Report --
+wire {{ rp.prefix }}raw_ecc_correctable   = (|{{ rp.prefix }}chk_done_1bit_err) & {{ rp.prefix }}wait_chk_rd_vld;
+wire {{ rp.prefix }}raw_ecc_uncorrectable = (|{{ rp.prefix }}chk_done_2bit_err) & {{ rp.prefix }}wait_chk_rd_vld;
+
+wire {{ rp.prefix }}ecc_correctable_valid   = ({{ rp.prefix }}raw_ecc_correctable   | i_ecc_err_insert[0]) & (~i_ecc_err_mask[0]);
+wire {{ rp.prefix }}ecc_uncorrectable_valid = ({{ rp.prefix }}raw_ecc_uncorrectable | i_ecc_err_insert[1]) & (~i_ecc_err_mask[1]);
+
+{% if detailed_report %}
+// -- Syndrome Priority Encoder --
+reg [{{ ecc_m }}-1:0] {{ rp.prefix }}ecc_err_syndrome;
+integer {{ rp.prefix }}syn_i;
+always @(*) begin
+    {{ rp.prefix }}ecc_err_syndrome = { {{ ecc_m }}{1'b0} };
+    for ({{ rp.prefix }}syn_i = ECC_SLICE_NUM - 1; {{ rp.prefix }}syn_i >= 0; {{ rp.prefix }}syn_i = {{ rp.prefix }}syn_i - 1) begin
+        if ({{ rp.prefix }}chk_done_err[{{ rp.prefix }}syn_i*2 +: 2] != 2'b00)
+            {{ rp.prefix }}ecc_err_syndrome = {{ rp.prefix }}chk_done_syndrome[{{ rp.prefix }}syn_i*{{ ecc_m }} +: {{ ecc_m }}];
+    end
+end
+{% endif %}
+
+{% else %}
+// -- Output (no ECC) --
+wire [DATA_WIDTH-1:0] {{ rp.prefix }}out_rd_data = {{ rp.phy_rd_data }}[DATA_WIDTH-1:0];
+
+{% endif %}
+// -- ECC Pipeline --
+{% if has_ecc %}
+{% set ecc_pipe_signals = [
+    {"name": rp.prefix ~ "out_rd_data", "width": "DATA_WIDTH"},
+    {"name": rp.prefix ~ "ecc_correctable_valid", "width": "1"},
+    {"name": rp.prefix ~ "wait_chk_rd_addr", "width": "ADDR_WIDTH"},
+    {"name": rp.prefix ~ "ecc_uncorrectable_valid", "width": "1"},
+] %}
+{% set ecc_pipe_width = "DATA_WIDTH + 1 + ADDR_WIDTH + 1" %}
+{% if detailed_report %}
+{% set ecc_pipe_width = ecc_pipe_width ~ " + " ~ ecc_m %}
+{% endif %}
+wire [DATA_WIDTH-1:0] {{ rp.prefix }}ecc_pipe_rd_data;
+wire                  {{ rp.prefix }}ecc_pipe_correctable_valid;
+wire [ADDR_WIDTH-1:0] {{ rp.prefix }}ecc_pipe_correctable_addr;
+wire                  {{ rp.prefix }}ecc_pipe_uncorrectable_valid;
+{% if detailed_report %}
+wire [{{ ecc_m }}-1:0]  {{ rp.prefix }}ecc_pipe_syndrome;
+{% endif %}
+
+data_syncn #(
+    .RESET_VALUE ({({{ ecc_pipe_width }}){1'b0}}),
+    .NUM_FLOPS   (ECC_PIPE_STAGES),
+    .DATA_WIDTH  ({{ ecc_pipe_width }})
+) u_{{ rp.prefix }}ecc_pipe (
+    .clk           ({{ rp.clk }}),
+    .reset_n       (i_rst_n),
+    .data_in       ({
+{% if detailed_report %}
+                     {{ rp.prefix }}ecc_err_syndrome,
+{% endif %}
+                     {{ rp.prefix }}ecc_uncorrectable_valid,
+                     {{ rp.prefix }}wait_chk_rd_addr,
+                     {{ rp.prefix }}ecc_correctable_valid,
+                     {{ rp.prefix }}out_rd_data
+                    }),
+    .data_out_sync ({
+{% if detailed_report %}
+                     {{ rp.prefix }}ecc_pipe_syndrome,
+{% endif %}
+                     {{ rp.prefix }}ecc_pipe_uncorrectable_valid,
+                     {{ rp.prefix }}ecc_pipe_correctable_addr,
+                     {{ rp.prefix }}ecc_pipe_correctable_valid,
+                     {{ rp.prefix }}ecc_pipe_rd_data
+                    })
+);
+
+{% else %}
+// ECC disabled — pass through directly
+wire [DATA_WIDTH-1:0] {{ rp.prefix }}ecc_pipe_rd_data = {{ rp.prefix }}out_rd_data;
+
+{% endif %}
+// -- Output Pipeline --
+{% if has_ecc %}
+{% set out_pipe_width = "DATA_WIDTH + 1 + ADDR_WIDTH + 1" %}
+{% if detailed_report %}
+{% set out_pipe_width = out_pipe_width ~ " + " ~ ecc_m %}
+{% endif %}
+wire [DATA_WIDTH-1:0] {{ rp.prefix }}final_rd_data;
+wire                  {{ rp.prefix }}final_correctable_valid;
+wire [ADDR_WIDTH-1:0] {{ rp.prefix }}final_correctable_addr;
+wire                  {{ rp.prefix }}final_uncorrectable_valid;
+{% if detailed_report %}
+wire [{{ ecc_m }}-1:0]  {{ rp.prefix }}final_syndrome;
+{% endif %}
+
+data_syncn #(
+    .RESET_VALUE ({({{ out_pipe_width }}){1'b0}}),
+    .NUM_FLOPS   (OUTPUT_PIPE_STAGES),
+    .DATA_WIDTH  ({{ out_pipe_width }})
+) u_{{ rp.prefix }}output_pipe (
+    .clk           ({{ rp.clk }}),
+    .reset_n       (i_rst_n),
+    .data_in       ({
+{% if detailed_report %}
+                     {{ rp.prefix }}ecc_pipe_syndrome,
+{% endif %}
+                     {{ rp.prefix }}ecc_pipe_uncorrectable_valid,
+                     {{ rp.prefix }}ecc_pipe_correctable_addr,
+                     {{ rp.prefix }}ecc_pipe_correctable_valid,
+                     {{ rp.prefix }}ecc_pipe_rd_data
+                    }),
+    .data_out_sync ({
+{% if detailed_report %}
+                     {{ rp.prefix }}final_syndrome,
+{% endif %}
+                     {{ rp.prefix }}final_uncorrectable_valid,
+                     {{ rp.prefix }}final_correctable_addr,
+                     {{ rp.prefix }}final_correctable_valid,
+                     {{ rp.prefix }}final_rd_data
+                    })
+);
+
+assign {{ rp.out_rd_data_port }}             = {{ rp.prefix }}final_rd_data;
+assign {{ rp.out_ecc_correctable_valid }}    = {{ rp.prefix }}final_correctable_valid;
+assign {{ rp.out_ecc_correctable_addr }}     = {{ rp.prefix }}final_correctable_addr;
+assign {{ rp.out_ecc_uncorrectable_valid }}  = {{ rp.prefix }}final_uncorrectable_valid;
+assign {{ rp.out_ecc_uncorrectable_addr }}   = {{ rp.prefix }}final_correctable_addr;
+{% if detailed_report %}
+assign {{ rp.out_ecc_syndrome }}             = {{ rp.prefix }}final_syndrome;
+{% endif %}
+
+{% else %}
+wire [DATA_WIDTH-1:0] {{ rp.prefix }}final_rd_data;
+
+data_syncn #(
+    .RESET_VALUE ({DATA_WIDTH{1'b0}}),
+    .NUM_FLOPS   (OUTPUT_PIPE_STAGES),
+    .DATA_WIDTH  (DATA_WIDTH)
+) u_{{ rp.prefix }}output_pipe (
+    .clk           ({{ rp.clk }}),
+    .reset_n       (i_rst_n),
+    .data_in       ({{ rp.prefix }}out_rd_data),
+    .data_out_sync ({{ rp.prefix }}final_rd_data)
+);
+
+assign {{ rp.out_rd_data_port }} = {{ rp.prefix }}final_rd_data;
+
+{% endif %}
+{% endfor %}
+endmodule

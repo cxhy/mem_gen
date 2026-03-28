@@ -1,0 +1,137 @@
+{% import "_macros.v.j2" as macros %}
+{{ macros.file_header("tb_" ~ top_name, description, date) }}
+`timescale 1ns / 1ps
+
+module tb_{{ top_name }};
+
+// =========================================================
+// Parameters
+// =========================================================
+localparam DATA_WIDTH  = {{ data_width }};
+localparam RAM_DEPTH   = {{ ram_depth }};
+localparam ADDR_WIDTH  = {{ addr_width }};
+{% if has_ecc %}
+localparam ECC_M       = {{ ecc_m }};
+{% endif %}
+localparam TOTAL_RD_LATENCY = {{ total_rd_latency }};
+
+// Test configuration
+{% if not is_rom %}
+localparam NUM_WRITE_VECTORS = {{ num_write_vectors }};
+{% endif %}
+localparam NUM_READ_VECTORS  = {{ num_read_vectors }};
+{% if has_mask %}
+localparam NUM_MASK_VECTORS  = {{ num_mask_vectors }};
+localparam MASK_WIDTH        = {{ mask_width }};
+{% endif %}
+
+// =========================================================
+// Clock / Reset
+// =========================================================
+{{ clock_decl }}
+{% if is_l2 %}
+reg rst_n;
+{% endif %}
+
+{{ clock_gen }}
+
+// =========================================================
+// DUT Signals
+// =========================================================
+{{ dut_signal_decls }}
+
+// =========================================================
+// Stimulus Memory
+// =========================================================
+{% if is_rom %}
+reg [DATA_WIDTH-1:0] rd_expect_mem [0:NUM_READ_VECTORS-1];
+
+initial begin
+    $readmemh("{{ rom_init_hex }}", {{ rom_mem_path }});
+    $readmemh("{{ rd_hex_file }}", rd_expect_mem);
+end
+{% else %}
+reg [DATA_WIDTH-1:0] wr_data_mem [0:NUM_WRITE_VECTORS-1];
+reg [DATA_WIDTH-1:0] rd_expect_mem [0:NUM_READ_VECTORS-1];
+{% if has_mask %}
+reg [MASK_WIDTH-1:0] mask_mem [0:NUM_MASK_VECTORS-1];
+reg [DATA_WIDTH-1:0] mask_expect_mem [0:NUM_MASK_VECTORS-1];
+{% endif %}
+
+initial begin
+    $readmemh("{{ wr_hex_file }}", wr_data_mem);
+    $readmemh("{{ rd_hex_file }}", rd_expect_mem);
+{% if has_mask %}
+    $readmemh("{{ mask_hex_file }}", mask_mem);
+    $readmemh("{{ mask_expect_hex_file }}", mask_expect_mem);
+{% endif %}
+end
+{% endif %}
+
+// =========================================================
+// DUT Instance
+// =========================================================
+{{ dut_instance }}
+
+// =========================================================
+// Checker
+// =========================================================
+task check_rdata;
+    input [DATA_WIDTH-1:0] expected;
+    input [DATA_WIDTH-1:0] actual;
+    input integer index;
+    begin
+        if (actual !== expected) begin
+            $display("ERROR: addr=%0d, expected=0x%h, got=0x%h", index, expected, actual);
+            errors = errors + 1;
+        end
+    end
+endtask
+
+// =========================================================
+// Test Flow
+// =========================================================
+integer errors;
+integer i;
+
+initial begin
+    errors = 0;
+    {{ init_signals }}
+
+{% if is_l2 %}
+    // -- Reset --
+    rst_n = 1'b0;
+    repeat(5) @(posedge {{ main_clk }}); #1;
+    rst_n = 1'b1;
+    @(posedge {{ main_clk }}); #1;
+
+{% endif %}
+{% if has_init %}
+    // -- Init Phase --
+    {{ init_phase }}
+
+{% endif %}
+{% if not is_rom %}
+    // -- Write Phase --
+    {{ write_phase }}
+
+{% endif %}
+    // -- Read & Check Phase --
+    {{ read_check_phase }}
+
+{% if has_mask %}
+    // -- Mask Write & Check Phase --
+    {{ mask_write_phase }}
+    {{ mask_read_check_phase }}
+
+{% endif %}
+    // -- Result --
+    if (errors == 0) begin
+        $display("PASS: %s -- all %0d checks passed", "{{ top_name }}", NUM_READ_VECTORS{{ mask_count_expr }});
+    end else begin
+        $display("FAIL: %s -- %0d errors detected", "{{ top_name }}", errors);
+    end
+    $finish;
+end
+
+endmodule
