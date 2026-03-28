@@ -323,6 +323,22 @@ class ConfigLoader:
                     f"Memory '{mem.get('name', '?')}': missing field '{f}'"
                 )
 
+        # Validate pipe stages and latency are non-negative integers
+        for field in ("ram_rd_latency", "input_pipe_stages", "output_pipe_stages"):
+            val = mem.get(field, 0)
+            if not isinstance(val, int) or val < 0:
+                raise ValueError(
+                    f"Memory '{mem['name']}': '{field}' must be a non-negative integer, "
+                    f"got {val!r}"
+                )
+        if "ecc_pipe_stages" in mem:
+            val = mem["ecc_pipe_stages"]
+            if not isinstance(val, int) or val < 0:
+                raise ValueError(
+                    f"Memory '{mem['name']}': 'ecc_pipe_stages' must be a non-negative "
+                    f"integer, got {val!r}"
+                )
+
         mem_type = mem["type"]
         if mem_type not in vendor_port_map.interface_types:
             raise ValueError(

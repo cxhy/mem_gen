@@ -6,12 +6,93 @@ Each base_type (SinglePort / DualPort / TrueDualPort / ROM) has:
   - signal_inits:  initial value assignments
   - init_phase:    Init FSM sequence
   - write_phase:   Write data loop
-  - read_check_phase:   Read + check loop
+  - read_check_phase:   Burst-issue + pipeline-check loop
   - mask_write_phase:   Mask write loop (mask types only)
   - mask_read_check_phase: Mask read back (mask types only)
+
+Read-check pattern (all types):
+  All reads are issued back-to-back (cen held high for NUM_*_VECTORS cycles),
+  then drained for TOTAL_RD_LATENCY cycles.  Results are checked as they
+  emerge from the pipeline — one per cycle starting at cycle TOTAL_RD_LATENCY.
+  This validates back-to-back pipeline throughput rather than one-at-a-time
+  sequential latency.
+
+TrueDualPort adds a second pass: B writes then A reads (tests B→A path).
 """
 
 from __future__ import annotations
+
+
+# ===========================================================================
+# ECC helpers (shared)
+# ===========================================================================
+
+def _ecc_check_snippet(port_prefix: str, indent: int = 8) -> str:
+    """Return Verilog ECC-status check lines.
+
+    Args:
+        port_prefix: port prefix string, e.g. "" / "a_" / "b_"
+        indent:      leading spaces for each generated line (default 8)
+    """
+    sp = " " * indent
+    sp2 = " " * (indent + 4)
+    return (
+        f"{sp}if (o_{port_prefix}ecc_correctable_valid !== 1'b0) begin\n"
+        f"{sp2}$display(\"ERROR: unexpected correctable ECC error at addr %0d\", i);\n"
+        f"{sp2}errors = errors + 1;\n"
+        f"{sp}end\n"
+        f"{sp}if (o_{port_prefix}ecc_uncorrectable_valid !== 1'b0) begin\n"
+        f"{sp2}$display(\"ERROR: unexpected uncorrectable ECC error at addr %0d\", i);\n"
+        f"{sp2}errors = errors + 1;\n"
+        f"{sp}end\n"
+    )
+
+
+def _ecc_signal_decls(ctx: dict, port_prefix: str) -> list[str]:
+    p = "i_" if ctx["is_l2"] else ""
+    aw = ctx["addr_width"]
+    lines: list[str] = []
+    if port_prefix in ("", "a_"):
+        lines.extend([
+            f"reg              {p}ecc_en;",
+            f"reg  [1:0]       {p}ecc_err_insert;",
+            f"reg  [1:0]       {p}ecc_err_mask;",
+        ])
+    lines.extend([
+        f"wire             o_{port_prefix}ecc_correctable_valid;",
+        f"wire [{aw}-1:0]  o_{port_prefix}ecc_correctable_addr;",
+        f"wire             o_{port_prefix}ecc_uncorrectable_valid;",
+        f"wire [{aw}-1:0]  o_{port_prefix}ecc_uncorrectable_addr;",
+    ])
+    return lines
+
+
+def _ecc_dut_ports(ctx: dict, p: str, port_prefix: str) -> list[str]:
+    return [
+        f"    .{p}ecc_en         ({p}ecc_en)",
+        f"    .{p}ecc_err_insert ({p}ecc_err_insert)",
+        f"    .{p}ecc_err_mask   ({p}ecc_err_mask)",
+    ]
+
+
+def _ecc_status_dut_ports(ctx: dict, port_prefix: str) -> list[str]:
+    return [
+        f"    .o_{port_prefix}ecc_correctable_valid   (o_{port_prefix}ecc_correctable_valid)",
+        f"    .o_{port_prefix}ecc_correctable_addr    (o_{port_prefix}ecc_correctable_addr)",
+        f"    .o_{port_prefix}ecc_uncorrectable_valid (o_{port_prefix}ecc_uncorrectable_valid)",
+        f"    .o_{port_prefix}ecc_uncorrectable_addr  (o_{port_prefix}ecc_uncorrectable_addr)",
+    ]
+
+
+def _ecc_signal_init_lines(port_prefix: str) -> list[str]:
+    lines: list[str] = []
+    if port_prefix in ("", "a_"):
+        lines.extend([
+            "i_ecc_en = 1'b1;",
+            "i_ecc_err_insert = 2'b00;",
+            "i_ecc_err_mask = 2'b00;",
+        ])
+    return lines
 
 
 # ===========================================================================
@@ -121,24 +202,26 @@ def sp_write_phase(ctx: dict, p: str) -> str:
 
 
 def sp_read_check_phase(ctx: dict, p: str) -> str:
+    """Burst-issue all reads, then pipeline-check results as they emerge."""
     rp = "o_" if ctx["is_l2"] else ""
-    lines = (
-        f"for (i = 0; i < NUM_READ_VECTORS; i = i + 1) begin\n"
+    ecc_block = _ecc_check_snippet("", indent=12) if ctx["has_ecc"] else ""
+    return (
+        f"for (i = 0; i < NUM_READ_VECTORS + TOTAL_RD_LATENCY; i = i + 1) begin\n"
         f"        @(posedge clk); #1;\n"
-        f"        {p}cen = 1'b1;\n"
-        f"        {p}wen = 1'b0;\n"
-        f"        {p}addr = i[ADDR_WIDTH-1:0];\n"
-        f"        @(posedge clk); #1;\n"
-        f"        {p}cen = 1'b0;\n"
-        f"        repeat(TOTAL_RD_LATENCY) @(posedge clk); #1;\n"
-        f"        check_rdata(rd_expect_mem[i], {rp}rdata, i);\n"
-    )
-    if ctx["has_ecc"]:
-        lines += _ecc_check_snippet("")
-    lines += (
+        f"        if (i < NUM_READ_VECTORS) begin\n"
+        f"            {p}cen = 1'b1;\n"
+        f"            {p}wen = 1'b0;\n"
+        f"            {p}addr = i[ADDR_WIDTH-1:0];\n"
+        f"        end else begin\n"
+        f"            {p}cen = 1'b0;\n"
+        f"        end\n"
+        f"        if (i >= TOTAL_RD_LATENCY) begin\n"
+        f"            check_rdata(rd_expect_mem[i - TOTAL_RD_LATENCY], {rp}rdata,\n"
+        f"                        i - TOTAL_RD_LATENCY);\n"
+        f"{ecc_block}"
+        f"        end\n"
         f"    end"
     )
-    return lines
 
 
 def sp_mask_write_phase(ctx: dict, p: str) -> str:
@@ -158,17 +241,22 @@ def sp_mask_write_phase(ctx: dict, p: str) -> str:
 
 
 def sp_mask_read_check_phase(ctx: dict, p: str) -> str:
+    """Burst-issue mask reads, then pipeline-check."""
     rp = "o_" if ctx["is_l2"] else ""
     return (
-        f"for (i = 0; i < NUM_MASK_VECTORS; i = i + 1) begin\n"
+        f"for (i = 0; i < NUM_MASK_VECTORS + TOTAL_RD_LATENCY; i = i + 1) begin\n"
         f"        @(posedge clk); #1;\n"
-        f"        {p}cen = 1'b1;\n"
-        f"        {p}wen = 1'b0;\n"
-        f"        {p}addr = i[ADDR_WIDTH-1:0];\n"
-        f"        @(posedge clk); #1;\n"
-        f"        {p}cen = 1'b0;\n"
-        f"        repeat(TOTAL_RD_LATENCY) @(posedge clk); #1;\n"
-        f"        check_rdata(mask_expect_mem[i], {rp}rdata, i);\n"
+        f"        if (i < NUM_MASK_VECTORS) begin\n"
+        f"            {p}cen = 1'b1;\n"
+        f"            {p}wen = 1'b0;\n"
+        f"            {p}addr = i[ADDR_WIDTH-1:0];\n"
+        f"        end else begin\n"
+        f"            {p}cen = 1'b0;\n"
+        f"        end\n"
+        f"        if (i >= TOTAL_RD_LATENCY) begin\n"
+        f"            check_rdata(mask_expect_mem[i - TOTAL_RD_LATENCY], {rp}rdata,\n"
+        f"                        i - TOTAL_RD_LATENCY);\n"
+        f"        end\n"
         f"    end"
     )
 
@@ -303,26 +391,28 @@ def dp_write_phase(ctx: dict, p: str, wr_clk: str) -> str:
 
 def dp_read_check_phase(ctx: dict, p: str, rd_clk: str,
                         is_async: bool) -> str:
+    """Burst-issue all reads on rd port, pipeline-check results."""
     rp = "o_" if ctx["is_l2"] else ""
     guard = ""
     if is_async:
         guard = f"repeat(10) @(posedge {rd_clk}); #1;\n    "
-    lines = guard + (
-        f"for (i = 0; i < NUM_READ_VECTORS; i = i + 1) begin\n"
+    ecc_block = _ecc_check_snippet("", indent=12) if ctx["has_ecc"] else ""
+    return guard + (
+        f"for (i = 0; i < NUM_READ_VECTORS + TOTAL_RD_LATENCY; i = i + 1) begin\n"
         f"        @(posedge {rd_clk}); #1;\n"
-        f"        {p}rd_en = 1'b1;\n"
-        f"        {p}rd_addr = i[ADDR_WIDTH-1:0];\n"
-        f"        @(posedge {rd_clk}); #1;\n"
-        f"        {p}rd_en = 1'b0;\n"
-        f"        repeat(TOTAL_RD_LATENCY) @(posedge {rd_clk}); #1;\n"
-        f"        check_rdata(rd_expect_mem[i], {rp}rd_data, i);\n"
-    )
-    if ctx["has_ecc"]:
-        lines += _ecc_check_snippet("")
-    lines += (
+        f"        if (i < NUM_READ_VECTORS) begin\n"
+        f"            {p}rd_en = 1'b1;\n"
+        f"            {p}rd_addr = i[ADDR_WIDTH-1:0];\n"
+        f"        end else begin\n"
+        f"            {p}rd_en = 1'b0;\n"
+        f"        end\n"
+        f"        if (i >= TOTAL_RD_LATENCY) begin\n"
+        f"            check_rdata(rd_expect_mem[i - TOTAL_RD_LATENCY], {rp}rd_data,\n"
+        f"                        i - TOTAL_RD_LATENCY);\n"
+        f"{ecc_block}"
+        f"        end\n"
         f"    end"
     )
-    return lines
 
 
 def dp_mask_write_phase(ctx: dict, p: str, wr_clk: str) -> str:
@@ -342,19 +432,24 @@ def dp_mask_write_phase(ctx: dict, p: str, wr_clk: str) -> str:
 
 def dp_mask_read_check_phase(ctx: dict, p: str, rd_clk: str,
                              is_async: bool) -> str:
+    """Burst-issue mask reads, pipeline-check."""
     rp = "o_" if ctx["is_l2"] else ""
     guard = ""
     if is_async:
         guard = f"repeat(10) @(posedge {rd_clk}); #1;\n    "
     return guard + (
-        f"for (i = 0; i < NUM_MASK_VECTORS; i = i + 1) begin\n"
+        f"for (i = 0; i < NUM_MASK_VECTORS + TOTAL_RD_LATENCY; i = i + 1) begin\n"
         f"        @(posedge {rd_clk}); #1;\n"
-        f"        {p}rd_en = 1'b1;\n"
-        f"        {p}rd_addr = i[ADDR_WIDTH-1:0];\n"
-        f"        @(posedge {rd_clk}); #1;\n"
-        f"        {p}rd_en = 1'b0;\n"
-        f"        repeat(TOTAL_RD_LATENCY) @(posedge {rd_clk}); #1;\n"
-        f"        check_rdata(mask_expect_mem[i], {rp}rd_data, i);\n"
+        f"        if (i < NUM_MASK_VECTORS) begin\n"
+        f"            {p}rd_en = 1'b1;\n"
+        f"            {p}rd_addr = i[ADDR_WIDTH-1:0];\n"
+        f"        end else begin\n"
+        f"            {p}rd_en = 1'b0;\n"
+        f"        end\n"
+        f"        if (i >= TOTAL_RD_LATENCY) begin\n"
+        f"            check_rdata(mask_expect_mem[i - TOTAL_RD_LATENCY], {rp}rd_data,\n"
+        f"                        i - TOTAL_RD_LATENCY);\n"
+        f"        end\n"
         f"    end"
     )
 
@@ -454,6 +549,7 @@ def tdp_init_phase(p: str) -> str:
 
 
 def tdp_write_phase(ctx: dict, p: str) -> str:
+    """Port A write phase."""
     mask_line = ""
     if ctx["has_mask"]:
         mw = ctx["mask_width"]
@@ -474,29 +570,78 @@ def tdp_write_phase(ctx: dict, p: str) -> str:
 
 
 def tdp_read_check_phase(ctx: dict, p: str) -> str:
+    """Port A write → Port B reads (burst+pipeline).  Tests A→B path."""
     rp = "o_" if ctx["is_l2"] else ""
-    ecc_prefix = "b_" if ctx["has_ecc"] else ""
-    lines = (
-        f"// Port B Read & Check\n"
-        f"    for (i = 0; i < NUM_READ_VECTORS; i = i + 1) begin\n"
+    ecc_block = _ecc_check_snippet("b_", indent=12) if ctx["has_ecc"] else ""
+    return (
+        f"// Port A Write -> Port B Read & Check (pipeline)\n"
+        f"    for (i = 0; i < NUM_READ_VECTORS + TOTAL_RD_LATENCY; i = i + 1) begin\n"
         f"        @(posedge b_clk); #1;\n"
-        f"        {p}b_cen = 1'b1;\n"
-        f"        {p}b_wen = 1'b0;\n"
-        f"        {p}b_addr = i[ADDR_WIDTH-1:0];\n"
-        f"        @(posedge b_clk); #1;\n"
-        f"        {p}b_cen = 1'b0;\n"
-        f"        repeat(TOTAL_RD_LATENCY) @(posedge b_clk); #1;\n"
-        f"        check_rdata(rd_expect_mem[i], {rp}b_rdata, i);\n"
-    )
-    if ctx["has_ecc"]:
-        lines += _ecc_check_snippet(ecc_prefix)
-    lines += (
+        f"        if (i < NUM_READ_VECTORS) begin\n"
+        f"            {p}b_cen = 1'b1;\n"
+        f"            {p}b_wen = 1'b0;\n"
+        f"            {p}b_addr = i[ADDR_WIDTH-1:0];\n"
+        f"        end else begin\n"
+        f"            {p}b_cen = 1'b0;\n"
+        f"        end\n"
+        f"        if (i >= TOTAL_RD_LATENCY) begin\n"
+        f"            check_rdata(rd_expect_mem[i - TOTAL_RD_LATENCY], {rp}b_rdata,\n"
+        f"                        i - TOTAL_RD_LATENCY);\n"
+        f"{ecc_block}"
+        f"        end\n"
         f"    end"
     )
-    return lines
+
+
+def tdp_b_write_phase(ctx: dict, p: str) -> str:
+    """Port B write phase: write b_wr_data_mem to addresses 0..N-1.
+    Tests B→A path when combined with tdp_a_read_check_phase.
+    """
+    mask_line = ""
+    if ctx["has_mask"]:
+        mw = ctx["mask_width"]
+        mask_line = f"\n        {p}b_bwen = {{{mw}{{1'b1}}}};"
+    return (
+        f"// Port B Write\n"
+        f"    for (i = 0; i < NUM_WRITE_VECTORS; i = i + 1) begin\n"
+        f"        @(posedge b_clk); #1;\n"
+        f"        {p}b_cen = 1'b1;\n"
+        f"        {p}b_wen = 1'b1;\n"
+        f"        {p}b_addr = i[ADDR_WIDTH-1:0];\n"
+        f"        {p}b_wdata = b_wr_data_mem[i];{mask_line}\n"
+        f"    end\n"
+        f"    @(posedge b_clk); #1;\n"
+        f"    {p}b_cen = 1'b0;\n"
+        f"    {p}b_wen = 1'b0;"
+    )
+
+
+def tdp_a_read_check_phase(ctx: dict, p: str) -> str:
+    """Port B write → Port A reads (burst+pipeline).  Tests B→A path."""
+    rp = "o_" if ctx["is_l2"] else ""
+    ecc_block = _ecc_check_snippet("a_", indent=12) if ctx["has_ecc"] else ""
+    return (
+        f"// Port B Write -> Port A Read & Check (pipeline)\n"
+        f"    for (i = 0; i < NUM_WRITE_VECTORS + TOTAL_RD_LATENCY; i = i + 1) begin\n"
+        f"        @(posedge a_clk); #1;\n"
+        f"        if (i < NUM_WRITE_VECTORS) begin\n"
+        f"            {p}a_cen = 1'b1;\n"
+        f"            {p}a_wen = 1'b0;\n"
+        f"            {p}a_addr = i[ADDR_WIDTH-1:0];\n"
+        f"        end else begin\n"
+        f"            {p}a_cen = 1'b0;\n"
+        f"        end\n"
+        f"        if (i >= TOTAL_RD_LATENCY) begin\n"
+        f"            check_rdata(b_rd_expect_mem[i - TOTAL_RD_LATENCY], {rp}a_rdata,\n"
+        f"                        i - TOTAL_RD_LATENCY);\n"
+        f"{ecc_block}"
+        f"        end\n"
+        f"    end"
+    )
 
 
 def tdp_mask_write_phase(ctx: dict, p: str) -> str:
+    """Port A mask write phase."""
     return (
         f"// Port A Mask Write\n"
         f"    for (i = 0; i < NUM_MASK_VECTORS; i = i + 1) begin\n"
@@ -514,18 +659,23 @@ def tdp_mask_write_phase(ctx: dict, p: str) -> str:
 
 
 def tdp_mask_read_check_phase(ctx: dict, p: str) -> str:
+    """Port B mask read & check (burst+pipeline)."""
     rp = "o_" if ctx["is_l2"] else ""
     return (
-        f"// Port B Mask Read & Check\n"
-        f"    for (i = 0; i < NUM_MASK_VECTORS; i = i + 1) begin\n"
+        f"// Port B Mask Read & Check (pipeline)\n"
+        f"    for (i = 0; i < NUM_MASK_VECTORS + TOTAL_RD_LATENCY; i = i + 1) begin\n"
         f"        @(posedge b_clk); #1;\n"
-        f"        {p}b_cen = 1'b1;\n"
-        f"        {p}b_wen = 1'b0;\n"
-        f"        {p}b_addr = i[ADDR_WIDTH-1:0];\n"
-        f"        @(posedge b_clk); #1;\n"
-        f"        {p}b_cen = 1'b0;\n"
-        f"        repeat(TOTAL_RD_LATENCY) @(posedge b_clk); #1;\n"
-        f"        check_rdata(mask_expect_mem[i], {rp}b_rdata, i);\n"
+        f"        if (i < NUM_MASK_VECTORS) begin\n"
+        f"            {p}b_cen = 1'b1;\n"
+        f"            {p}b_wen = 1'b0;\n"
+        f"            {p}b_addr = i[ADDR_WIDTH-1:0];\n"
+        f"        end else begin\n"
+        f"            {p}b_cen = 1'b0;\n"
+        f"        end\n"
+        f"        if (i >= TOTAL_RD_LATENCY) begin\n"
+        f"            check_rdata(mask_expect_mem[i - TOTAL_RD_LATENCY], {rp}b_rdata,\n"
+        f"                        i - TOTAL_RD_LATENCY);\n"
+        f"        end\n"
         f"    end"
     )
 
@@ -578,84 +728,22 @@ def rom_signal_inits(ctx: dict, p: str) -> list[str]:
 
 
 def rom_read_check_phase(ctx: dict, p: str) -> str:
+    """Burst-issue ROM reads, pipeline-check results."""
     rp = "o_" if ctx["is_l2"] else ""
-    lines = (
-        f"for (i = 0; i < NUM_READ_VECTORS; i = i + 1) begin\n"
-        f"        @(posedge clk); #1;\n"
-        f"        {p}cen = 1'b1;\n"
-        f"        {p}addr = i[ADDR_WIDTH-1:0];\n"
-        f"        @(posedge clk); #1;\n"
-        f"        {p}cen = 1'b0;\n"
-        f"        repeat(TOTAL_RD_LATENCY) @(posedge clk); #1;\n"
-        f"        check_rdata(rd_expect_mem[i], {rp}rdata, i);\n"
-    )
-    if ctx["has_ecc"]:
-        lines += _ecc_check_snippet("")
-    lines += (
-        f"    end"
-    )
-    return lines
-
-
-# ===========================================================================
-# ECC helpers (shared)
-# ===========================================================================
-
-def _ecc_signal_decls(ctx: dict, port_prefix: str) -> list[str]:
-    p = "i_" if ctx["is_l2"] else ""
-    aw = ctx["addr_width"]
-    lines: list[str] = []
-    if port_prefix == "" or port_prefix == "a_":
-        lines.extend([
-            f"reg              {p}ecc_en;",
-            f"reg  [1:0]       {p}ecc_err_insert;",
-            f"reg  [1:0]       {p}ecc_err_mask;",
-        ])
-    lines.extend([
-        f"wire             o_{port_prefix}ecc_correctable_valid;",
-        f"wire [{aw}-1:0]  o_{port_prefix}ecc_correctable_addr;",
-        f"wire             o_{port_prefix}ecc_uncorrectable_valid;",
-        f"wire [{aw}-1:0]  o_{port_prefix}ecc_uncorrectable_addr;",
-    ])
-    return lines
-
-
-def _ecc_dut_ports(ctx: dict, p: str, port_prefix: str) -> list[str]:
-    return [
-        f"    .{p}ecc_en         ({p}ecc_en)",
-        f"    .{p}ecc_err_insert ({p}ecc_err_insert)",
-        f"    .{p}ecc_err_mask   ({p}ecc_err_mask)",
-    ]
-
-
-def _ecc_status_dut_ports(ctx: dict, port_prefix: str) -> list[str]:
-    return [
-        f"    .o_{port_prefix}ecc_correctable_valid   (o_{port_prefix}ecc_correctable_valid)",
-        f"    .o_{port_prefix}ecc_correctable_addr    (o_{port_prefix}ecc_correctable_addr)",
-        f"    .o_{port_prefix}ecc_uncorrectable_valid (o_{port_prefix}ecc_uncorrectable_valid)",
-        f"    .o_{port_prefix}ecc_uncorrectable_addr  (o_{port_prefix}ecc_uncorrectable_addr)",
-    ]
-
-
-def _ecc_signal_init_lines(port_prefix: str) -> list[str]:
-    lines: list[str] = []
-    if port_prefix == "" or port_prefix == "a_":
-        lines.extend([
-            "i_ecc_en = 1'b1;",
-            "i_ecc_err_insert = 2'b00;",
-            "i_ecc_err_mask = 2'b00;",
-        ])
-    return lines
-
-
-def _ecc_check_snippet(port_prefix: str) -> str:
+    ecc_block = _ecc_check_snippet("", indent=12) if ctx["has_ecc"] else ""
     return (
-        f"        if (o_{port_prefix}ecc_correctable_valid !== 1'b0) begin\n"
-        f"            $display(\"ERROR: unexpected correctable error at addr %0d\", i);\n"
-        f"            errors = errors + 1;\n"
+        f"for (i = 0; i < NUM_READ_VECTORS + TOTAL_RD_LATENCY; i = i + 1) begin\n"
+        f"        @(posedge clk); #1;\n"
+        f"        if (i < NUM_READ_VECTORS) begin\n"
+        f"            {p}cen = 1'b1;\n"
+        f"            {p}addr = i[ADDR_WIDTH-1:0];\n"
+        f"        end else begin\n"
+        f"            {p}cen = 1'b0;\n"
         f"        end\n"
-        f"        if (o_{port_prefix}ecc_uncorrectable_valid !== 1'b0) begin\n"
-        f"            $display(\"ERROR: unexpected uncorrectable error at addr %0d\", i);\n"
-        f"            errors = errors + 1;\n"
+        f"        if (i >= TOTAL_RD_LATENCY) begin\n"
+        f"            check_rdata(rd_expect_mem[i - TOTAL_RD_LATENCY], {rp}rdata,\n"
+        f"                        i - TOTAL_RD_LATENCY);\n"
+        f"{ecc_block}"
         f"        end\n"
+        f"    end"
     )

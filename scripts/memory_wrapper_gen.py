@@ -109,6 +109,7 @@ class MemoryWrapperGenerator(ABC):
                 if mask_gran > 1:
                     padded_n = math.ceil(ecc_params.n / mask_gran) * mask_gran
                     ctx["mask_per_slice"] = padded_n // mask_gran
+                    ctx["data_mask_per_slice"] = ecc_params.k // mask_gran
             ctx.update({
                 "ecc_slice_dw": ecc_params.k,
                 "ecc_slice_with_ecc_dw": ecc_params.n,
@@ -214,24 +215,64 @@ class MemoryWrapperGenerator(ABC):
 
     @staticmethod
     def _build_phy_bwen(total_mask: int, mask_width: int,
-                        mask_per_slice: int, pipe_bwen: str,
-                        init_guard: bool) -> str:
+                        mask_per_slice: int, data_mask_per_slice: int,
+                        pipe_bwen: str, init_guard: bool) -> str:
         """Build phy_bwen Verilog assignment.
 
-        When mask_per_slice > 1, each user mask bit is replicated
-        mask_per_slice times to cover the padded ECC codeword.
+        When mask_per_slice > 1 (ECC + coarse mask), physical mask is built
+        per ECC slice: each slice contributes parity/padding mask bits (tied to
+        1'b1, at the HIGH end) followed by the user data mask bits.  Any
+        remaining column-padding mask bits (from tiling) are prepended as
+        additional 1'b1 bits at the MSB.
+
+        Within each ECC slice the physical layout is:
+            [k-1:0]            data bits  (user-mask controlled)
+            [padded_n-1:k]     parity+pad (always write = 1'b1)
+        so data_mask bits appear at lower mask-bit indices and parity bits at
+        higher indices within the slice.
+
+        Args:
+            total_mask:           Total physical mask width (TOTAL_MASK_WIDTH).
+            mask_width:           User-visible mask width (DATA_WIDTH // mask_gran).
+            mask_per_slice:       Physical mask bits per ECC slice (padded_n // mask_gran).
+            data_mask_per_slice:  User mask bits per ECC slice (k // mask_gran).
+            pipe_bwen:            Name of the pipelined user mask signal.
+            init_guard:           Prepend init_ram_en ? {total_mask{1'b1}} : ... mux.
         """
         init_prefix = (f"init_ram_en"
                        f" ? {{{total_mask}{{1'b1}}}}"
                        f" : " if init_guard else "")
 
         if mask_per_slice > 1:
+            if data_mask_per_slice <= 0 or mask_width % data_mask_per_slice != 0:
+                raise ValueError(
+                    f"_build_phy_bwen: mask_width({mask_width}) must be a positive "
+                    f"multiple of data_mask_per_slice({data_mask_per_slice})."
+                )
+            slice_count = mask_width // data_mask_per_slice
+            remaining = total_mask - slice_count * mask_per_slice
+            if remaining < 0:
+                raise ValueError(
+                    f"_build_phy_bwen: bit count mismatch: "
+                    f"slice_count({slice_count}) * mask_per_slice({mask_per_slice}) "
+                    f"= {slice_count * mask_per_slice} > total_mask({total_mask}). "
+                    f"Check ECC+mask alignment parameters."
+                )
+            parity_mask_per_slice = mask_per_slice - data_mask_per_slice
             parts: list[str] = []
-            remaining = total_mask - mask_per_slice * mask_width
+            # Column-padding bits at MSB (from last-column partial fill in tiling)
             if remaining > 0:
                 parts.append(f"{{{remaining}{{1'b1}}}}")
-            for i in range(mask_width - 1, -1, -1):
-                parts.append(f"{{{mask_per_slice}{{{pipe_bwen}[{i}]}}}}")
+            # ECC slices from high to low
+            for s in range(slice_count - 1, -1, -1):
+                if parity_mask_per_slice > 0:
+                    parts.append(f"{{{parity_mask_per_slice}{{1'b1}}}}")
+                lo = s * data_mask_per_slice
+                hi = (s + 1) * data_mask_per_slice - 1
+                if lo == hi:
+                    parts.append(f"{pipe_bwen}[{lo}]")
+                else:
+                    parts.append(f"{pipe_bwen}[{hi}:{lo}]")
             return f"{init_prefix}{{{', '.join(parts)}}};"
         else:
             pad = total_mask - mask_width
@@ -322,7 +363,8 @@ class SinglePortWrapperGen(MemoryWrapperGenerator):
         if has_mask:
             bwen_rhs = self._build_phy_bwen(
                 ctx["total_mask_width"], ctx["mask_width"],
-                ctx["mask_per_slice"], "pipe_bwen", init_guard=True)
+                ctx["mask_per_slice"], ctx.get("data_mask_per_slice", 1),
+                "pipe_bwen", init_guard=True)
             phy_connect.append(
                 f"wire [TOTAL_MASK_WIDTH-1:0] phy_bwen = {bwen_rhs}")
 
@@ -462,7 +504,8 @@ class DualPortWrapperGen(MemoryWrapperGenerator):
         if has_mask:
             bwen_rhs = self._build_phy_bwen(
                 ctx["total_mask_width"], ctx["mask_width"],
-                ctx["mask_per_slice"], "pipe_wr_bwen", init_guard=True)
+                ctx["mask_per_slice"], ctx.get("data_mask_per_slice", 1),
+                "pipe_wr_bwen", init_guard=True)
             phy_connect.append(
                 f"wire [TOTAL_MASK_WIDTH-1:0] phy_wr_mask = {bwen_rhs}")
 
@@ -630,7 +673,8 @@ class TrueDualPortWrapperGen(MemoryWrapperGenerator):
         if has_mask:
             a_bwen_rhs = self._build_phy_bwen(
                 ctx["total_mask_width"], ctx["mask_width"],
-                ctx["mask_per_slice"], "pipe_a_bwen", init_guard=True)
+                ctx["mask_per_slice"], ctx.get("data_mask_per_slice", 1),
+                "pipe_a_bwen", init_guard=True)
             phy_connect.append(
                 f"wire [TOTAL_MASK_WIDTH-1:0] phy_a_bwen = {a_bwen_rhs}")
 
@@ -643,7 +687,8 @@ class TrueDualPortWrapperGen(MemoryWrapperGenerator):
         if has_mask:
             b_bwen_rhs = self._build_phy_bwen(
                 ctx["total_mask_width"], ctx["mask_width"],
-                ctx["mask_per_slice"], "pipe_b_bwen", init_guard=False)
+                ctx["mask_per_slice"], ctx.get("data_mask_per_slice", 1),
+                "pipe_b_bwen", init_guard=False)
             phy_connect.append(
                 f"wire [TOTAL_MASK_WIDTH-1:0] phy_b_bwen = {b_bwen_rhs}")
 
@@ -800,7 +845,18 @@ def gen_memory_wrapper(mem_spec: MemorySpec, ecc_params: EccParams,
                        module_name: str, phy_wrapper_name: str,
                        tiling: TilingParams) -> str:
     """Entry point — dispatch to the correct generator by base_type."""
-    generator = GENERATORS[interface_type.base_type]
+    base_type = interface_type.base_type
+    if base_type not in GENERATORS:
+        raise ValueError(
+            f"gen_memory_wrapper: unsupported base_type '{base_type}'. "
+            f"Expected one of: {list(GENERATORS.keys())}"
+        )
+    if ecc_params.enabled and ecc_modules is None:
+        raise ValueError(
+            "gen_memory_wrapper: ecc_params.enabled=True but ecc_modules is None. "
+            "Provide EccModuleInfo when ECC is enabled."
+        )
+    generator = GENERATORS[base_type]
     return generator.generate(mem_spec, ecc_params, ecc_modules,
                               interface_type, module_name, phy_wrapper_name,
                               tiling)

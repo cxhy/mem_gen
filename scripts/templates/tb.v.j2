@@ -57,6 +57,11 @@ reg [DATA_WIDTH-1:0] rd_expect_mem [0:NUM_READ_VECTORS-1];
 reg [MASK_WIDTH-1:0] mask_mem [0:NUM_MASK_VECTORS-1];
 reg [DATA_WIDTH-1:0] mask_expect_mem [0:NUM_MASK_VECTORS-1];
 {% endif %}
+{% if b_wr_hex_file %}
+// TDP B->A path stimulus
+reg [DATA_WIDTH-1:0] b_wr_data_mem   [0:NUM_WRITE_VECTORS-1];
+reg [DATA_WIDTH-1:0] b_rd_expect_mem [0:NUM_WRITE_VECTORS-1];
+{% endif %}
 
 initial begin
     $readmemh("{{ wr_hex_file }}", wr_data_mem);
@@ -64,6 +69,10 @@ initial begin
 {% if has_mask %}
     $readmemh("{{ mask_hex_file }}", mask_mem);
     $readmemh("{{ mask_expect_hex_file }}", mask_expect_mem);
+{% endif %}
+{% if b_wr_hex_file %}
+    $readmemh("{{ b_wr_hex_file }}", b_wr_data_mem);
+    $readmemh("{{ b_rd_hex_file }}", b_rd_expect_mem);
 {% endif %}
 end
 {% endif %}
@@ -112,13 +121,19 @@ initial begin
 
 {% endif %}
 {% if not is_rom %}
-    // -- Write Phase --
+    // -- Write Phase (A->B path) --
     {{ write_phase }}
 
 {% endif %}
-    // -- Read & Check Phase --
+    // -- Read & Check Phase (A->B path) --
     {{ read_check_phase }}
 
+{% if b_write_phase %}
+    // -- TDP B->A Path: Port B Write -> Port A Read & Check --
+    {{ b_write_phase }}
+    {{ a_read_check_phase }}
+
+{% endif %}
 {% if has_mask %}
     // -- Mask Write & Check Phase --
     {{ mask_write_phase }}
@@ -127,7 +142,7 @@ initial begin
 {% endif %}
     // -- Result --
     if (errors == 0) begin
-        $display("PASS: %s -- all %0d checks passed", "{{ top_name }}", NUM_READ_VECTORS{{ mask_count_expr }});
+        $display("PASS: %s -- all checks passed", "{{ top_name }}");
     end else begin
         $display("FAIL: %s -- %0d errors detected", "{{ top_name }}", errors);
     end

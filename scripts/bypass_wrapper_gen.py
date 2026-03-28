@@ -201,6 +201,11 @@ def gen_bypass_wrapper(mem_spec: MemorySpec, ecc_params: EccParams,
                        module_name: str, l2_wrapper_name: str,
                        tiling: TilingParams) -> str:
     """Entry point — dispatch to the correct generator by base_type."""
+    if interface_type.is_async:
+        raise ValueError(
+            "gen_bypass_wrapper: async dual_port is not supported. "
+            "Only sync dual_port (1r1w, 1r1wm) is supported."
+        )
     base_type = interface_type.base_type
     if base_type not in GENERATORS:
         raise ValueError(

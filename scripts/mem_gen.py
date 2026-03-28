@@ -98,6 +98,7 @@ def main():
     results: list[dict] = []
     skip_count = 0
     gen_count = 0
+    all_tb_top_names: list[str] = []  # all instances (for Makefile)
 
     for i, mem_spec in enumerate(project_config.memories):
         raw_mem = raw_memories[i]
@@ -106,6 +107,7 @@ def main():
             mem_spec.width, mem_spec.depth,
         )
         config_hash = compute_config_hash(raw_mem)
+        all_tb_top_names.append(top_name)
 
         # Incremental check
         if not args.full and _can_skip(top_name, config_hash, old_hash_map):
@@ -134,11 +136,11 @@ def main():
     # Generate filelist.f (always full, even in incremental mode)
     _write_filelist(results, project_config, rtl_outdir, PROJECT_ROOT)
 
-    # Generate run_all.sh (always, even in incremental mode)
+    # Generate Makefile covering all instances (always, even in incremental mode)
     if not args.no_tb:
-        from tb_gen import gen_run_all_script
-        gen_run_all_script(sim_outdir)
-        print(f"  run_all.sh written to {sim_outdir}")
+        from tb_gen import gen_makefile
+        gen_makefile(all_tb_top_names, tb_outdir)
+        print(f"  Makefile written to {tb_outdir}")
 
     report_writer.write(project_config.project, prefix, results, output_dir)
     print(f"\nDone! Generated: {gen_count}, Skipped: {skip_count}")
@@ -213,7 +215,7 @@ def _find_old_result(top_name: str, output_dir: Path) -> dict | None:
 
 def _copy_data_syncn(common_dir: Path) -> None:
     common_dir.mkdir(parents=True, exist_ok=True)
-    src = PROJECT_ROOT / "data_syncn.v"
+    src = SCRIPTS_DIR / "std" / "data_syncn.v"
     dst = common_dir / "data_syncn.v"
     if src.exists():
         shutil.copy2(src, dst)

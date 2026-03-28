@@ -52,6 +52,14 @@ class PhysicalWrapperGenerator(ABC):
     def calc_tiling(logical_width: int, depth: int,
                     lib_width: int, lib_depth: int,
                     lib_mask_width: int = 0) -> TilingParams:
+        if logical_width <= 0:
+            raise ValueError(f"calc_tiling: logical_width must be positive, got {logical_width}")
+        if depth <= 0:
+            raise ValueError(f"calc_tiling: depth must be positive, got {depth}")
+        if lib_width <= 0:
+            raise ValueError(f"calc_tiling: lib_width must be positive, got {lib_width}")
+        if lib_depth <= 0:
+            raise ValueError(f"calc_tiling: lib_depth must be positive, got {lib_depth}")
         col_count = math.ceil(logical_width / lib_width)
         row_count = math.ceil(depth / lib_depth)
         total_blocks = col_count * row_count
@@ -710,7 +718,13 @@ def gen_physical_wrapper(mem_spec: MemorySpec, ecc_params: EccParams,
                          interface_type: InterfaceType,
                          module_name: str) -> str:
     """Entry point — dispatch to the correct generator by interface_type."""
+    base_type = interface_type.base_type
+    if base_type not in GENERATORS:
+        raise ValueError(
+            f"gen_physical_wrapper: unsupported base_type '{base_type}'. "
+            f"Expected one of: {list(GENERATORS.keys())}"
+        )
     sub_type_info = resolve_sub_type(interface_type, mem_spec.physical.sub_type)
-    generator = GENERATORS[interface_type.base_type]
+    generator = GENERATORS[base_type]
     return generator.generate(mem_spec, ecc_params, tiling, interface_type,
                               sub_type_info, module_name)
