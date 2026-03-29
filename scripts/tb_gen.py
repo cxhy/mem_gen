@@ -307,8 +307,12 @@ def gen_stimulus(
 
         # New data for masked writes
         new_data = [_fill_pattern(_MASK_NEW_DATA_BYTE, width)] * num_mask
-        # Old data = wr_data at those addresses
-        old_data = wr_data[:num_mask]
+        # Old data: for TDP, B->A write overwrites addresses before mask phase
+        if is_tdp:
+            all_ones_m = (1 << width) - 1
+            old_data = [v ^ all_ones_m for v in wr_data[:num_mask]]
+        else:
+            old_data = wr_data[:num_mask]
         mask_expect = _compute_mask_expect(
             old_data, new_data, masks, width, mask_gran, mask_width,
         )
@@ -360,7 +364,7 @@ def gen_makefile(top_names: list[str], tb_outdir: Path) -> Path:
             f"\t@echo \"=== Simulating {top} ===\"\n"
             f"\tVERILATOR_ROOT=$(VERILATOR_ROOT) $(VERILATOR) \\\n"
             f"\t    --cc --timing --exe --main -DSIM \\\n"
-            f"\t    -Wno-TIMESCALEMOD \\\n"
+            f"\t    -Wno-TIMESCALEMOD -Wno-MULTIDRIVEN \\\n"
             f"\t    -f $(FILELIST) \\\n"
             f"\t    $(TB_DIR)/tb_{top}.v \\\n"
             f"\t    --top-module {tb_mod} \\\n"
@@ -516,14 +520,15 @@ class TbGenerator(ABC):
         if has_ecc:
             ctx["ecc_m"] = ecc_params.m
 
-        # Hex file names (relative — TB and hex are in same directory)
-        ctx["wr_hex_file"] = f"{top_name}_wr_data.hex"
-        ctx["rd_hex_file"] = f"{top_name}_rd_expect.hex"
+        # Hex file names (relative to sim/ runtime CWD → ../tb/)
+        hex_prefix = f"../tb/{top_name}"
+        ctx["wr_hex_file"] = f"{hex_prefix}_wr_data.hex"
+        ctx["rd_hex_file"] = f"{hex_prefix}_rd_expect.hex"
         if is_rom:
-            ctx["rom_init_hex"] = f"{top_name}_rom_init.hex"
+            ctx["rom_init_hex"] = f"{hex_prefix}_rom_init.hex"
         if has_mask:
-            ctx["mask_hex_file"] = f"{top_name}_mask.hex"
-            ctx["mask_expect_hex_file"] = f"{top_name}_mask_expect.hex"
+            ctx["mask_hex_file"] = f"{hex_prefix}_mask.hex"
+            ctx["mask_expect_hex_file"] = f"{hex_prefix}_mask_expect.hex"
             mask_gran, mask_width = _calc_mask_params(mem_spec, has_mask)
             ctx["mask_width"] = mask_width
             ctx["mask_gran"] = mask_gran
@@ -651,8 +656,8 @@ class TrueDualPortTbGen(TbGenerator):
         ctx["read_check_phase"] = tb_verilog.tdp_read_check_phase(ctx, p)
 
         # TDP B→A path
-        ctx["b_wr_hex_file"] = f"{top_name}_b_wr_data.hex"
-        ctx["b_rd_hex_file"] = f"{top_name}_b_rd_expect.hex"
+        ctx["b_wr_hex_file"] = f"../tb/{top_name}_b_wr_data.hex"
+        ctx["b_rd_hex_file"] = f"../tb/{top_name}_b_rd_expect.hex"
         ctx["b_write_phase"] = tb_verilog.tdp_b_write_phase(ctx, p)
         ctx["a_read_check_phase"] = tb_verilog.tdp_a_read_check_phase(ctx, p)
 
