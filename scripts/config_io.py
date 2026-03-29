@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sys
 import warnings
 from dataclasses import dataclass
@@ -91,6 +92,7 @@ class ProjectConfig:
     prefix: str
     memories: tuple[MemorySpec, ...]
     vendor_port_map: VendorPortMap
+    prj_path: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +271,7 @@ class ConfigLoader:
             prefix=mem_cfg["prefix"],
             memories=tuple(memories),
             vendor_port_map=vendor_port_map,
+            prj_path=mem_cfg.get("prj_path", ""),
         )
 
     def _parse_vendor_port_map(self, vendor_cfg: dict) -> VendorPortMap:
@@ -511,11 +514,21 @@ class VendorLibChecker:
             print("  WARNING: No lib_paths configured, skipping vendor cell file verification")
             return
 
+        # Check if any lib_path contains unresolved env vars
+        has_env_vars = any("$" in os.path.expandvars(p) or "$" in p
+                          for p in lib_paths
+                          if "$" in p)
+        if has_env_vars:
+            print("  WARNING: lib_paths contains unresolved environment variables, "
+                  "skipping vendor cell file verification")
+            return
+
         for mem_spec in project_config.memories:
             lib_name = mem_spec.physical.lib_name
             found = False
             for search_dir in lib_paths:
-                search_path = Path(search_dir)
+                expanded = os.path.expandvars(search_dir)
+                search_path = Path(expanded)
                 if not search_path.is_absolute() and project_root is not None:
                     search_path = project_root / search_path
                 for ext in (".v", ".sv"):
